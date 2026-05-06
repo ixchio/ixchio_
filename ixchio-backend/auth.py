@@ -1,25 +1,25 @@
 """
 Auth — JWT tokens + bcrypt passwords + mongo persistence.
 
-Nothing fancy. Sign up, get a token, slap it on every request.
+Sign up, get a token, attach it to every request.
 Passwords are bcrypt'd. Tokens expire in 24h. Rate limited to
-5 login attempts per minute per IP (well, per email for now since
-we're behind a reverse proxy and IP extraction is a whole thing).
+5 login attempts per minute per email.
 
-If mongo isn't available, falls back to an in-memory dict so you
-can still hack on the frontend locally without spinning up docker.
+Falls back to an in-memory dict when mongo isn't available
+so you can still dev locally without docker-compose.
 """
 
 import os
+import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from collections import defaultdict
 from time import time
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import jwt
 import bcrypt
@@ -29,13 +29,13 @@ from core.db import get_db
 SECRET_KEY = os.getenv("JWT_SECRET") or secrets.token_hex(32)
 ALGORITHM = "HS256"
 TOKEN_HOURS = 24
+MIN_PASSWORD_LEN = 6
+
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 security = HTTPBearer()
 
-# in-memory fallback when mongo isn't around
 _mem_users: dict = {}
-
-# ghetto rate limiter for login — {email: [timestamps]}
 _login_attempts: dict = defaultdict(list)
 MAX_LOGIN_PER_MIN = 5
 
@@ -47,10 +47,30 @@ class SignupRequest(BaseModel):
     password: str
     name: str = ""
 
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not _EMAIL_RE.match(v):
+            raise ValueError("Invalid email format")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < MIN_PASSWORD_LEN:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LEN} characters")
+        return v
+
 
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class TokenResponse(BaseModel):
@@ -65,10 +85,9 @@ class UserInfo(BaseModel):
     created_at: str
 
 
-# ---- password stuff ----
+# ---- password ----
 
 def _hash_pw(password: str) -> str:
-    # bcrypt handles salt internally, that's the whole point
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
@@ -76,19 +95,19 @@ def _check_pw(password: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(password.encode(), hashed.encode())
     except Exception:
-        # probably an old sha256 hash from before we switched
         return False
 
 
 # ---- jwt ----
 
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _mint_token(email: str) -> str:
+    now = _now_utc()
     return jwt.encode(
-        {
-            "sub": email,
-            "exp": datetime.utcnow() + timedelta(hours=TOKEN_HOURS),
-            "iat": datetime.utcnow(),
-        },
+        {"sub": email, "exp": now + timedelta(hours=TOKEN_HOURS), "iat": now},
         SECRET_KEY,
         algorithm=ALGORITHM,
     )
@@ -103,42 +122,38 @@ def _crack_token(token: str) -> dict:
         raise HTTPException(401, "Bad token")
 
 
-# ---- rate limit check ----
+# ---- rate limit ----
 
 def _check_rate_limit(email: str):
     now = time()
-    # toss out anything older than 60s
     _login_attempts[email] = [t for t in _login_attempts[email] if now - t < 60]
     if len(_login_attempts[email]) >= MAX_LOGIN_PER_MIN:
         raise HTTPException(429, "Too many login attempts. Chill for a minute.")
     _login_attempts[email].append(now)
 
 
-# ---- the actual auth logic ----
+# ---- auth logic ----
 
 async def signup(req: SignupRequest) -> TokenResponse:
     db = get_db()
 
     if db is not None:
-        # mongo path
         existing = await db.users.find_one({"email": req.email})
         if existing:
             raise HTTPException(409, "Email already taken")
-
         await db.users.insert_one({
             "email": req.email,
             "password_hash": _hash_pw(req.password),
             "name": req.name,
-            "created_at": datetime.utcnow(),
+            "created_at": _now_utc(),
         })
     else:
-        # fallback — in-memory
         if req.email in _mem_users:
             raise HTTPException(409, "Email already taken")
         _mem_users[req.email] = {
             "password_hash": _hash_pw(req.password),
             "name": req.name,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": _now_utc().isoformat(),
         }
 
     return TokenResponse(access_token=_mint_token(req.email))
@@ -165,12 +180,14 @@ async def get_current_user(
 ) -> str:
     payload = _crack_token(creds.credentials)
     email = payload.get("sub")
+    if not email:
+        raise HTTPException(401, "Invalid token payload")
 
     db = get_db()
     if db is not None:
         user = await db.users.find_one({"email": email})
         if not user:
-            raise HTTPException(401, "User not found — maybe deleted?")
+            raise HTTPException(401, "User not found")
     else:
         if email not in _mem_users:
             raise HTTPException(401, "User not found")
@@ -185,10 +202,11 @@ async def get_user_info(email: str) -> Optional[UserInfo]:
         user = await db.users.find_one({"email": email})
         if not user:
             return None
+        ca = user["created_at"]
         return UserInfo(
             email=email,
             name=user.get("name", ""),
-            created_at=user["created_at"].isoformat() if isinstance(user["created_at"], datetime) else str(user["created_at"]),
+            created_at=ca.isoformat() if isinstance(ca, datetime) else str(ca),
         )
     else:
         user = _mem_users.get(email)

@@ -7,6 +7,8 @@ import os
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20)
+
 
 class TavilyClient:
     def __init__(self, rate_limiter, circuit_breaker):
@@ -14,24 +16,31 @@ class TavilyClient:
         self.base_url = "https://api.tavily.com/search"
         self.rate_limiter = rate_limiter
         self.circuit_breaker = circuit_breaker
+        self._session: aiohttp.ClientSession | None = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=REQUEST_TIMEOUT)
+        return self._session
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def search(self, query: str, max_results: int = 5) -> dict:
         await self.rate_limiter.wait_if_needed("tavily")
 
         async def _hit_api():
-            async with aiohttp.ClientSession() as session:
-                resp = await session.post(
-                    self.base_url,
-                    json={
-                        "api_key": self.api_key,
-                        "query": query,
-                        "max_results": max_results,
-                        "search_depth": "basic",
-                    },
-                )
-                if resp.status != 200:
-                    raise Exception(f"Tavily {resp.status}")
-                return await resp.json()
+            session = self._get_session()
+            resp = await session.post(
+                self.base_url,
+                json={
+                    "api_key": self.api_key,
+                    "query": query,
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                },
+            )
+            if resp.status != 200:
+                body = await resp.text()
+                raise Exception(f"Tavily {resp.status}: {body}")
+            return await resp.json()
 
         return await self.circuit_breaker.call(_hit_api)

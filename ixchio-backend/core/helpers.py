@@ -44,6 +44,8 @@ def extract_json(text: str) -> dict:
             v = True
         elif v.lower() == "false":
             v = False
+        elif v.lower() == "null":
+            v = None
         elif v.isdigit():
             v = int(v)
         elif v.replace(".", "", 1).isdigit():
