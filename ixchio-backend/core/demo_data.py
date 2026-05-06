@@ -4,7 +4,7 @@ Returns a perfect, comprehensive research report instantly without hitting any A
 or waiting for the 60-second STORM pipeline.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 DEMO_TASK_ID = "demo-task-0000-0000-0000"
 
@@ -70,7 +70,7 @@ DEMO_TASK_DATA = {
     "status": "completed",
     "query": "impact of quantum computing on cryptography (DEMO)",
     "user": "recruiter@demo.com",
-    "created_at": datetime.utcnow().isoformat(),
+    "created_at": datetime.now(timezone.utc).isoformat(),
     "progress": 100,
     "report": DEMO_REPORT_MARKDOWN,
     "stats": {

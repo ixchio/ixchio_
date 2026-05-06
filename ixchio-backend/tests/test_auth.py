@@ -5,6 +5,7 @@ Runs against the in-memory fallback (no mongo needed).
 
 import pytest
 from unittest.mock import patch
+from pydantic import ValidationError
 from auth import (
     signup, login, _hash_pw, _check_pw, _mint_token, _crack_token,
     _check_rate_limit, _login_attempts, _mem_users,
@@ -24,7 +25,7 @@ def test_bcrypt_roundtrip():
 def test_hash_is_not_plaintext():
     hashed = _hash_pw("secret")
     assert hashed != "secret"
-    assert len(hashed) > 20  # bcrypt hashes are ~60 chars
+    assert len(hashed) > 20
 
 
 # ---- jwt ----
@@ -41,11 +42,27 @@ def test_bad_token_raises():
     assert exc.value.status_code == 401
 
 
+# ---- input validation ----
+
+def test_invalid_email_rejected():
+    with pytest.raises(ValidationError):
+        SignupRequest(email="not-an-email", password="password123", name="Test")
+
+
+def test_short_password_rejected():
+    with pytest.raises(ValidationError):
+        SignupRequest(email="test@example.com", password="abc", name="Test")
+
+
+def test_email_normalized():
+    req = LoginRequest(email="  Test@Example.COM  ", password="whatever")
+    assert req.email == "test@example.com"
+
+
 # ---- rate limiting ----
 
 def test_rate_limit_allows_normal_usage():
     _login_attempts.clear()
-    # shouldn't raise for the first few attempts
     for _ in range(4):
         _check_rate_limit("normal@test.com")
 
@@ -64,7 +81,6 @@ def test_rate_limit_blocks_spam():
 async def test_signup_flow():
     _mem_users.clear()
 
-    # mock get_db to return None (force in-memory mode)
     with patch("auth.get_db", return_value=None):
         result = await signup(SignupRequest(email="new@test.com", password="pass123", name="Tester"))
         assert result.access_token
@@ -89,8 +105,8 @@ async def test_login_flow():
     _login_attempts.clear()
 
     with patch("auth.get_db", return_value=None):
-        await signup(SignupRequest(email="login@test.com", password="mypass", name="X"))
-        result = await login(LoginRequest(email="login@test.com", password="mypass"))
+        await signup(SignupRequest(email="login@test.com", password="mypass1", name="X"))
+        result = await login(LoginRequest(email="login@test.com", password="mypass1"))
         assert result.access_token
 
 
@@ -100,7 +116,7 @@ async def test_login_wrong_password():
     _login_attempts.clear()
 
     with patch("auth.get_db", return_value=None):
-        await signup(SignupRequest(email="wrong@test.com", password="correct", name="X"))
+        await signup(SignupRequest(email="wrong@test.com", password="correct1", name="X"))
 
         with pytest.raises(HTTPException) as exc:
             await login(LoginRequest(email="wrong@test.com", password="incorrect"))

@@ -8,48 +8,68 @@ load_dotenv()
 
 import os
 import asyncio
+import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from core.helpers import sanitize_query
 from core.vector_db import PersistentVectorDB
 from core.db import get_db, ensure_indexes, ping as mongo_ping
-from core.demo_data import DEMO_TASK_ID, DEMO_TASK_DATA
+from core.demo_data import DEMO_TASK_DATA
 from pipeline.graph import DeepResearchGraph
 import auth
 
+logger = logging.getLogger("ixchio")
 
 # ---- in-memory fallbacks (used when mongo isn't available) ----
-_mem_tasks = {}
-_mem_task_by_query = {}
+_mem_tasks: dict[str, dict] = {}
+_mem_task_by_query: dict[str, str] = {}
 _tasks_lock = asyncio.Lock()
 
-research_graph = None
+research_graph: DeepResearchGraph | None = None
 
 MAX_TASK_AGE = 3600
 
+_UUID_RE = __import__("re").compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", __import__("re").IGNORECASE
+)
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_valid_uuid(val: str) -> bool:
+    return bool(_UUID_RE.match(val))
+
 
 async def _evict_old_tasks():
-    """Cleanup loop. Only matters for in-memory mode — mongo has TTL indexes."""
+    """Cleanup loop for in-memory mode. Mongo uses TTL indexes instead."""
     while True:
         await asyncio.sleep(600)
         db = get_db()
         if db is not None:
-            # mongo handles TTL cleanup on its own, skip
             continue
 
-        now = datetime.utcnow()
+        now = _now_utc()
         async with _tasks_lock:
-            dead = [
-                tid for tid, info in _mem_tasks.items()
-                if (now - datetime.fromisoformat(info["created_at"])).total_seconds() > MAX_TASK_AGE
-            ]
+            dead = []
+            for tid, info in _mem_tasks.items():
+                try:
+                    created = datetime.fromisoformat(info["created_at"])
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if (now - created).total_seconds() > MAX_TASK_AGE:
+                        dead.append(tid)
+                except (KeyError, ValueError):
+                    dead.append(tid)
+
             for tid in dead:
                 q = _mem_tasks[tid].get("query")
                 if q and _mem_task_by_query.get(q) == tid:
@@ -57,34 +77,43 @@ async def _evict_old_tasks():
                 del _mem_tasks[tid]
 
 
+# ---- CORS config ----
+
+def _get_cors_origins() -> list[str]:
+    extra = os.getenv("CORS_ORIGINS", "")
+    origins = [
+        "https://ixchio.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    if extra:
+        origins.extend(o.strip() for o in extra.split(",") if o.strip())
+    return origins
+
+
 # ---- lifespan ----
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global research_graph
-    print("🚀 booting ixchio...")
+    logger.info("booting ixchio...")
 
-    # mongo indexes (safe to call repeatedly)
     await ensure_indexes()
 
     mongo_ok = await mongo_ping()
-    if mongo_ok:
-        print("🍃 mongo connected")
-    else:
-        print("⚠️  mongo unavailable — running in-memory mode")
+    logger.info("mongo %s", "connected" if mongo_ok else "unavailable — in-memory mode")
 
-    # vector db
     if os.getenv("PINECONE_API_KEY"):
         from core.pinecone_db import PineconeDB
         vdb = PineconeDB()
-        print("📌 pinecone loaded")
+        logger.info("pinecone loaded")
     else:
         vdb = PersistentVectorDB()
-        print("💾 local chromadb")
+        logger.info("local chromadb")
 
     research_graph = DeepResearchGraph(vector_db=vdb)
     cleanup = asyncio.create_task(_evict_old_tasks())
-    print("✅ ready")
+    logger.info("ready")
     yield
     cleanup.cancel()
 
@@ -100,11 +129,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://ixchio.vercel.app",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -129,27 +154,23 @@ async def _save_task(task: dict):
 async def _get_task(task_id: str) -> dict | None:
     db = get_db()
     if db is not None:
-        doc = await db.research_tasks.find_one({"task_id": task_id}, {"_id": 0})
-        return doc
-    else:
-        return _mem_tasks.get(task_id)
+        return await db.research_tasks.find_one({"task_id": task_id}, {"_id": 0})
+    return _mem_tasks.get(task_id)
 
 
 async def _find_task_by_query(query: str) -> dict | None:
     db = get_db()
     if db is not None:
-        doc = await db.research_tasks.find_one(
+        return await db.research_tasks.find_one(
             {"query": query, "status": {"$in": ["pending", "running", "completed"]}},
             {"_id": 0},
         )
-        return doc
-    else:
-        tid = _mem_task_by_query.get(query)
-        if tid and tid in _mem_tasks:
-            t = _mem_tasks[tid]
-            if t.get("status") in ("pending", "running", "completed"):
-                return t
-        return None
+    tid = _mem_task_by_query.get(query)
+    if tid and tid in _mem_tasks:
+        t = _mem_tasks[tid]
+        if t.get("status") in ("pending", "running", "completed"):
+            return t
+    return None
 
 
 # ---- auth routes ----
@@ -168,7 +189,7 @@ async def do_login(req: auth.LoginRequest):
 async def me(email: str = Depends(auth.get_current_user)):
     info = await auth.get_user_info(email)
     if not info:
-        raise HTTPException(404, "User gone?")
+        raise HTTPException(404, "User not found")
     return info
 
 
@@ -189,16 +210,14 @@ async def create_research(
 ):
     safe_q = sanitize_query(request.query)
 
-    # ---- DEMO MODE INTERCEPT ----
-    if safe_q.lower() == "demo" or safe_q.lower() == "impact of quantum computing on cryptography":
-        # we still track it in DB just so it shows up in their history if they want
+    # demo mode
+    if safe_q.lower() in ("demo", "impact of quantum computing on cryptography"):
         demo_copy = DEMO_TASK_DATA.copy()
         demo_copy["user"] = user
-        demo_copy["created_at"] = datetime.utcnow().isoformat()
-        demo_copy["task_id"] = str(uuid.uuid4()) # give it a unique ID so they can run it multiple times
+        demo_copy["created_at"] = _now_utc().isoformat()
+        demo_copy["task_id"] = str(uuid.uuid4())
         await _save_task(demo_copy)
         return {"task_id": demo_copy["task_id"], "status": "completed", "is_demo": True}
-    # -----------------------------
 
     # dedup — don't re-run identical queries
     existing = await _find_task_by_query(safe_q)
@@ -211,12 +230,10 @@ async def create_research(
         "status": "pending",
         "query": safe_q,
         "user": user,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": _now_utc().isoformat(),
         "progress": 0,
     }
     await _save_task(task)
-
-    # also track in memory for the query dedup shortcut
     _mem_task_by_query[safe_q] = task_id
 
     request.query = safe_q
@@ -226,7 +243,7 @@ async def create_research(
 
 async def _run_research(task_id: str, request: ResearchRequest):
     try:
-        task = await _get_task(task_id) or {}
+        task = await _get_task(task_id) or {"task_id": task_id}
         task["status"] = "running"
         await _save_task(task)
 
@@ -250,6 +267,7 @@ async def _run_research(task_id: str, request: ResearchRequest):
         await _save_task(task)
 
     except Exception as e:
+        logger.exception("Research task %s failed", task_id)
         task = await _get_task(task_id) or {"task_id": task_id}
         task.update({"status": "failed", "error": str(e), "progress": 0})
         await _save_task(task)
@@ -257,6 +275,8 @@ async def _run_research(task_id: str, request: ResearchRequest):
 
 @app.get("/api/v1/research/{task_id}", tags=["Research"])
 async def get_research(task_id: str):
+    if not _is_valid_uuid(task_id):
+        raise HTTPException(400, "Invalid task ID format")
     task = await _get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -267,6 +287,19 @@ async def get_research(task_id: str):
 
 @app.websocket("/ws/research/{task_id}")
 async def ws_research(ws: WebSocket, task_id: str):
+    # validate token from query param before accepting
+    token = ws.query_params.get("token")
+    if token:
+        try:
+            auth._crack_token(token)
+        except HTTPException:
+            await ws.close(code=4001)
+            return
+
+    if not _is_valid_uuid(task_id):
+        await ws.close(code=4000)
+        return
+
     await ws.accept()
     try:
         while True:
@@ -289,6 +322,8 @@ async def ws_research(ws: WebSocket, task_id: str):
             await asyncio.sleep(1)
     except WebSocketDisconnect:
         pass
+    except Exception:
+        logger.exception("WebSocket error for task %s", task_id)
 
 
 # ---- health ----
@@ -304,13 +339,12 @@ async def health():
     }
 
 
-# ---- history (new! users can see past research) ----
+# ---- history ----
 
 @app.get("/api/v1/history", tags=["Research"])
 async def get_history(user: str = Depends(auth.get_current_user)):
     db = get_db()
     if db is None:
-        # in-memory mode — just return what we have
         user_tasks = [t for t in _mem_tasks.values() if t.get("user") == user]
         return {"tasks": sorted(user_tasks, key=lambda x: x.get("created_at", ""), reverse=True)[:20]}
 

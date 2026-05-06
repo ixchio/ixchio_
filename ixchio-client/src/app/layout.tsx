@@ -1,29 +1,19 @@
 import type { Metadata } from "next";
-import { VT323, Space_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const vt323 = VT323({
-  variable: "--font-vt323",
-  weight: "400",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const spaceMono = Space_Mono({
-  variable: "--font-space-mono",
-  weight: ["400", "700"],
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "ixchio — Deep Research Engine",
-  description:
-    "Multi-agent autonomous research assistant powered by STORM perspectives, reflection loops, and adaptive search routing. Built for deep, comprehensive research.",
-  keywords: ["AI research", "deep research", "autonomous agent", "STORM", "multi-agent"],
+  title: "ixchio — Deep Research",
+  description: "Autonomous research assistant. Multi-agent deep research with adaptive search and reflection.",
   openGraph: {
-    title: "ixchio — Deep Research Engine",
-    description: "Multi-agent autonomous research assistant with STORM perspectives and adaptive search.",
+    title: "ixchio — Deep Research",
+    description: "Autonomous multi-agent research assistant.",
     type: "website",
   },
 };
@@ -35,9 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${vt323.variable} ${spaceMono.variable} antialiased min-h-screen bg-[#030305] text-zinc-100 font-mono`}
-      >
+      <body className={`${inter.variable} antialiased min-h-screen bg-black text-neutral-200 font-sans`}>
         {children}
       </body>
     </html>
