@@ -16,18 +16,19 @@ class ResearchState(TypedDict):
     research_plan: Optional[Dict]
     expert_perspectives: Optional[List[Dict]]
     search_results: Optional[List[Dict]]
+    reranked_results: Optional[List[Dict]]
     extracted_data: Optional[List[Dict]]
     deep_extractions: Optional[List[Dict]]
     synthesized_content: Optional[Dict]
     report: Optional[str]
     reflection_gaps: Optional[List[str]]
+    citation_report: Optional[Dict]
     sources: Optional[List[Dict]]
 
     # control flow
     current_step: str
     progress: int
     search_retry_count: int
-    validate_retry_count: int
     search_round: int
     reflection_count: int
     errors: List[str]
