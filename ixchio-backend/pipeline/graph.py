@@ -27,6 +27,13 @@ from core.vector_db import PersistentVectorDB
 
 from clients import GroqClient, OpenRouterClient, TavilyClient, CerebrasClient, JinaClient
 
+# depth → (sub_queries, max_search_per_query, extract_top_n, max_reflection)
+DEPTH_CONFIG = {
+    "shallow": {"sub_queries": 3, "search_per_q": 2, "extract_top": 2, "max_reflect": 0},
+    "medium":  {"sub_queries": 5, "search_per_q": 3, "extract_top": 3, "max_reflect": 2},
+    "deep":    {"sub_queries": 8, "search_per_q": 5, "extract_top": 5, "max_reflect": 3},
+}
+
 
 class DeepResearchGraph:
     def __init__(self, vector_db=None):
@@ -38,10 +45,18 @@ class DeepResearchGraph:
         self.cerebras = CerebrasClient(rl, CircuitBreaker())
         self.jina = JinaClient(rl, CircuitBreaker())
 
+        self._clients = [self.groq, self.openrouter, self.tavily, self.cerebras, self.jina]
+
         self.cache = SemanticCache()
         self.vector_db = vector_db or PersistentVectorDB()
 
         self.graph = self._wire_graph()
+
+    async def close(self):
+        """Shut down all aiohttp sessions cleanly."""
+        for client in self._clients:
+            if hasattr(client, "_session") and client._session and not client._session.closed:
+                await client._session.close()
 
     def _wire_graph(self) -> StateGraph:
         g = StateGraph(ResearchState)
@@ -76,23 +91,27 @@ class DeepResearchGraph:
 
         return g.compile()
 
+    def _depth_cfg(self, state: ResearchState) -> dict:
+        return DEPTH_CONFIG.get(state.get("depth", "medium"), DEPTH_CONFIG["medium"])
+
     # ------------------------------------------------------------------
-    # helpers for routing
+    # helpers for routing (separate counters for search vs validation)
     # ------------------------------------------------------------------
     def _retry_or_proceed(self, state: ResearchState) -> str:
-        if not state["search_results"] and state["retry_count"] <= 2:
+        if not state["search_results"] and state["search_retry_count"] <= 2:
             return "retry"
         return "proceed"
 
     def _needs_followup(self, state: ResearchState) -> str:
         gaps = state.get("reflection_gaps") or []
-        if gaps and state["reflection_count"] <= 2:
+        cfg = self._depth_cfg(state)
+        if gaps and cfg["max_reflect"] > 0 and state["reflection_count"] < cfg["max_reflect"]:
             return "followup"
         return "done"
 
     def _accept_or_redo(self, state: ResearchState) -> str:
         word_count = len((state.get("report") or "").split())
-        if word_count < 100 and state["retry_count"] <= 2:
+        if word_count < 100 and state["validate_retry_count"] <= 2:
             return "redo"
         if word_count < 50:
             return "fail"
@@ -102,11 +121,13 @@ class DeepResearchGraph:
     # NODE: Plan — Cerebras speed brain decomposes the query
     # ------------------------------------------------------------------
     async def _plan(self, state: ResearchState) -> ResearchState:
+        cfg = self._depth_cfg(state)
         print(f"⚡ [plan] breaking down: {state['query'][:60]}...")
+        state["current_step"] = "Planning research"
 
         async def _do_plan():
             prompt = (
-                f"Break this research query into 5 diverse sub-queries. "
+                f"Break this research query into {cfg['sub_queries']} diverse sub-queries. "
                 f"Classify each as 'news', 'technical', or 'general'.\n"
                 f"Query: {state['query']}\n"
                 f'Return JSON: {{"search_queries": [{{"query": "...", "type": "news|technical|general"}}]}}'
@@ -124,7 +145,7 @@ class DeepResearchGraph:
         plan, cache_status = await self.cache.get_or_compute(
             f"plan:{state['query']}", _do_plan
         )
-        state["research_plan"] = plan
+        state["research_plan"] = plan or {}
         state["progress"] = 10
         if cache_status == "cache_hit":
             state["cache_hits"] += 1
@@ -137,6 +158,7 @@ class DeepResearchGraph:
     # ------------------------------------------------------------------
     async def _storm_perspectives(self, state: ResearchState) -> ResearchState:
         print("🧑‍🔬 [storm] generating expert panel...")
+        state["current_step"] = "Generating expert panel (STORM)"
 
         prompt = (
             f"Topic: '{state['query']}'\n"
@@ -157,18 +179,18 @@ class DeepResearchGraph:
         experts = parsed.get("experts", [])
         state["expert_perspectives"] = experts
 
-        # fold expert questions into the search plan
         extra_qs = []
         for expert in experts:
             for q in expert.get("questions", []):
                 extra_qs.append({"query": q, "type": "general"})
 
-        existing = state["research_plan"].get("search_queries", [])
-        # handle case where planner returned plain strings instead of dicts
+        plan = state.get("research_plan") or {}
+        existing = plan.get("search_queries", [])
         if existing and isinstance(existing[0], str):
             existing = [{"query": q, "type": "general"} for q in existing]
 
-        state["research_plan"]["search_queries"] = existing + extra_qs[:4]
+        plan["search_queries"] = existing + extra_qs[:4]
+        state["research_plan"] = plan
         state["progress"] = 15
         state["total_api_calls"] += 1
         return state
@@ -177,29 +199,31 @@ class DeepResearchGraph:
     # NODE: Adaptive Search — route each query to the right engine
     # ------------------------------------------------------------------
     async def _adaptive_search(self, state: ResearchState) -> ResearchState:
+        cfg = self._depth_cfg(state)
         print(f"🔍 [search] round {state['search_round']}...")
+        state["current_step"] = f"Searching (round {state['search_round']})"
 
-        queries = state["research_plan"].get(
+        plan = state.get("research_plan") or {}
+        queries = plan.get(
             "search_queries", [{"query": state["query"], "type": "general"}]
         )
         if queries and isinstance(queries[0], str):
             queries = [{"query": q, "type": "general"} for q in queries]
 
+        max_queries = min(len(queries), state.get("max_sources", 10))
         results = state.get("search_results") or []
 
-        for item in queries[:8]:
+        for item in queries[:max_queries]:
             q = item["query"] if isinstance(item, dict) else str(item)
             q_type = item.get("type", "general") if isinstance(item, dict) else "general"
 
             try:
                 if q_type == "technical":
-                    # jina for docs / papers
                     hits = await self.jina.search(q)
                     for h in hits:
                         results.append({**h, "source_engine": "jina"})
                 else:
-                    # tavily for news / general
-                    resp = await self.tavily.search(q, max_results=3)
+                    resp = await self.tavily.search(q, max_results=cfg["search_per_q"])
                     for r in resp.get("results", []):
                         results.append({
                             "title": r.get("title", ""),
@@ -214,7 +238,7 @@ class DeepResearchGraph:
 
         state["search_results"] = results
         if not results:
-            state["retry_count"] += 1
+            state["search_retry_count"] += 1
         state["progress"] = 30
         return state
 
@@ -222,34 +246,48 @@ class DeepResearchGraph:
     # NODE: Deep Extract — Jina Reader pulls full page content
     # ------------------------------------------------------------------
     async def _deep_extract(self, state: ResearchState) -> ResearchState:
-        print(f"📖 [extract] pulling top sources via Jina Reader...")
+        cfg = self._depth_cfg(state)
+        print("📖 [extract] pulling top sources via Jina Reader...")
+        state["current_step"] = "Extracting source content"
 
-        # pick the top-scoring unique URLs
         seen, top_urls = set(), []
         for r in sorted(state["search_results"], key=lambda x: x.get("score", 0), reverse=True):
             url = r.get("url", "")
-            if url and url not in seen and len(top_urls) < 5:
+            if url and url not in seen and len(top_urls) < cfg["extract_top"] + 2:
                 top_urls.append(url)
                 seen.add(url)
 
-        # basic extraction from search snippets
         extracted = []
-        for r in state["search_results"][:10]:
+        for r in state["search_results"][:state.get("max_sources", 10)]:
             extracted.append({
                 "fact": r.get("content", "")[:300],
                 "url": r.get("url", ""),
                 "title": r.get("title", ""),
             })
 
-        # deep pull via Jina Reader (top 3)
         deep = []
-        for url in top_urls[:3]:
+        for url in top_urls[:cfg["extract_top"]]:
             try:
                 content = await self.jina.read_url(url)
                 deep.append({"url": url, "full_content": content[:3000]})
                 state["total_api_calls"] += 1
             except Exception as e:
                 state["errors"].append(f"jina_reader: {e}")
+
+        # collect sources for the frontend
+        source_list = []
+        seen_urls = set()
+        for r in state["search_results"]:
+            url = r.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                source_list.append({
+                    "title": r.get("title", ""),
+                    "url": url,
+                    "engine": r.get("source_engine", ""),
+                    "score": r.get("score", 0),
+                })
+        state["sources"] = source_list
 
         state["extracted_data"] = extracted
         state["deep_extractions"] = deep
@@ -260,9 +298,9 @@ class DeepResearchGraph:
     # NODE: Synthesize — BM25 + Vector hybrid fusion
     # ------------------------------------------------------------------
     async def _synthesize(self, state: ResearchState) -> ResearchState:
+        state["current_step"] = "Synthesizing findings"
         texts = [f["fact"] for f in state["extracted_data"]]
 
-        # add deep extraction content as bonus evidence
         for de in (state.get("deep_extractions") or []):
             texts.append(de["full_content"][:500])
 
@@ -276,21 +314,17 @@ class DeepResearchGraph:
             state["progress"] = 65
             return state
 
-        # store in vector DB for future retrieval
         self.vector_db.add_documents(texts[: len(metadata)], metadata)
 
-        # vector search
         vec_hits = self.vector_db.search(state["query"], k=10)
         vec_texts = [h["text"] for h in vec_hits]
 
-        # BM25
         tokenized = [t.split() for t in texts]
         bm25 = BM25Okapi(tokenized)
         scores = bm25.get_scores(state["query"].split())
         top_idx = np.argsort(scores)[-10:][::-1]
         bm25_texts = [texts[i] for i in top_idx if scores[i] > 0]
 
-        # fuse + dedup
         combined, seen = [], set()
         for t in vec_texts + bm25_texts:
             if t not in seen:
@@ -305,10 +339,11 @@ class DeepResearchGraph:
         return state
 
     # ------------------------------------------------------------------
-    # NODE: Write Report — weaves in expert perspectives + gap fixes
+    # NODE: Write Report
     # ------------------------------------------------------------------
     async def _write_report(self, state: ResearchState) -> ResearchState:
         print("✍️ [write] drafting report...")
+        state["current_step"] = "Writing report"
 
         facts = "\n".join(state["synthesized_content"]["key_facts"][:10])
 
@@ -348,8 +383,15 @@ class DeepResearchGraph:
     # NODE: Reflect — self-critique the draft
     # ------------------------------------------------------------------
     async def _reflect(self, state: ResearchState) -> ResearchState:
+        cfg = self._depth_cfg(state)
+        if cfg["max_reflect"] == 0:
+            state["reflection_gaps"] = []
+            state["progress"] = 90
+            return state
+
         round_num = state["reflection_count"] + 1
         print(f"🤔 [reflect] round {round_num}...")
+        state["current_step"] = f"Self-critiquing (round {round_num})"
 
         prompt = (
             f"You're a tough reviewer. Read this report on '{state['query']}' "
@@ -377,6 +419,7 @@ class DeepResearchGraph:
     async def _followup_search(self, state: ResearchState) -> ResearchState:
         gaps = state.get("reflection_gaps", [])
         print(f"🔄 [followup] filling {len(gaps)} gaps...")
+        state["current_step"] = f"Filling {len(gaps)} knowledge gaps"
 
         new_facts = []
         for gap in gaps[:3]:
@@ -399,9 +442,10 @@ class DeepResearchGraph:
     # NODE: Validate — 3-model consensus vote
     # ------------------------------------------------------------------
     async def _validate(self, state: ResearchState) -> ResearchState:
+        state["current_step"] = "Validating report quality"
         report = state.get("report", "")
         if len(report.split()) < 100:
-            state["retry_count"] += 1
+            state["validate_retry_count"] += 1
             state["progress"] = 100
             return state
 
@@ -433,9 +477,10 @@ class DeepResearchGraph:
             avg = sum(s.get("relevancy", 5) for s in scores) / len(scores)
             print(f"🔬 [validate] consensus: {avg:.1f}/10")
             if avg < 6.0:
-                state["retry_count"] += 1
+                state["validate_retry_count"] += 1
 
         state["progress"] = 100
+        state["current_step"] = "Complete"
         return state
 
     # ------------------------------------------------------------------
@@ -455,9 +500,11 @@ class DeepResearchGraph:
             synthesized_content=None,
             report=None,
             reflection_gaps=None,
+            sources=None,
             current_step="Initializing",
             progress=0,
-            retry_count=0,
+            search_retry_count=0,
+            validate_retry_count=0,
             search_round=1,
             reflection_count=0,
             errors=[],

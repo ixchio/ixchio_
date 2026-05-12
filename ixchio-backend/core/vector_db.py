@@ -5,6 +5,7 @@ This one is the local fallback for dev / low-cost deployments.
 """
 
 import os
+import uuid
 import chromadb
 from typing import List, Dict
 from sentence_transformers import SentenceTransformer
@@ -30,7 +31,7 @@ class PersistentVectorDB:
             return
         model = self._get_model()
         embeddings = model.encode(texts).tolist()
-        ids = [f"doc_{self.collection.count() + i}" for i in range(len(texts))]
+        ids = [f"doc_{uuid.uuid4().hex[:12]}" for _ in range(len(texts))]
         self.collection.add(
             embeddings=embeddings,
             documents=texts,
@@ -39,9 +40,11 @@ class PersistentVectorDB:
         )
 
     def search(self, query: str, k: int = 5) -> List[Dict]:
+        if self.collection.count() == 0:
+            return []
         model = self._get_model()
         query_embedding = model.encode([query]).tolist()
-        results = self.collection.query(query_embeddings=query_embedding, n_results=k)
+        results = self.collection.query(query_embeddings=query_embedding, n_results=min(k, self.collection.count()))
         found = []
         for i, doc in enumerate(results["documents"][0]):
             found.append({

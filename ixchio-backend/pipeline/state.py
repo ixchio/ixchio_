@@ -21,11 +21,13 @@ class ResearchState(TypedDict):
     synthesized_content: Optional[Dict]
     report: Optional[str]
     reflection_gaps: Optional[List[str]]
+    sources: Optional[List[Dict]]
 
     # control flow
     current_step: str
     progress: int
-    retry_count: int
+    search_retry_count: int
+    validate_retry_count: int
     search_round: int
     reflection_count: int
     errors: List[str]

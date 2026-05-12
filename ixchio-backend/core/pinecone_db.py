@@ -53,7 +53,8 @@ class PineconeDB:
         embeddings = model.encode(texts).tolist()
 
         vectors = []
-        base_id = self.index.describe_index_stats().get("total_vector_count", 0)
+        stats = self.index.describe_index_stats()
+        base_id = getattr(stats, "total_vector_count", 0) or 0
         for i, (emb, text, meta) in enumerate(zip(embeddings, texts, metadata)):
             vectors.append({
                 "id": f"doc_{base_id + i}",

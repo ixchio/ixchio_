@@ -1,12 +1,14 @@
 """
 ixchio — Deep Research Engine
 Thin FastAPI shell. All the real logic lives in pipeline/, clients/, and core/.
+No auth required — open access.
 """
 
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import re
 import asyncio
 import logging
 import uuid
@@ -14,7 +16,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -23,11 +25,9 @@ from core.vector_db import PersistentVectorDB
 from core.db import get_db, ensure_indexes, ping as mongo_ping
 from core.demo_data import DEMO_TASK_DATA
 from pipeline.graph import DeepResearchGraph
-import auth
 
 logger = logging.getLogger("ixchio")
 
-# ---- in-memory fallbacks (used when mongo isn't available) ----
 _mem_tasks: dict[str, dict] = {}
 _mem_task_by_query: dict[str, str] = {}
 _tasks_lock = asyncio.Lock()
@@ -36,8 +36,8 @@ research_graph: DeepResearchGraph | None = None
 
 MAX_TASK_AGE = 3600
 
-_UUID_RE = __import__("re").compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", __import__("re").IGNORECASE
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
 )
 
 
@@ -77,21 +77,19 @@ async def _evict_old_tasks():
                 del _mem_tasks[tid]
 
 
-# ---- CORS config ----
-
 def _get_cors_origins() -> list[str]:
     extra = os.getenv("CORS_ORIGINS", "")
     origins = [
         "https://ixchio.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:12000",
+        "http://127.0.0.1:12000",
     ]
     if extra:
         origins.extend(o.strip() for o in extra.split(",") if o.strip())
     return origins
 
-
-# ---- lifespan ----
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -115,15 +113,15 @@ async def lifespan(app: FastAPI):
     cleanup = asyncio.create_task(_evict_old_tasks())
     logger.info("ready")
     yield
+    # cleanup aiohttp sessions on shutdown
+    await research_graph.close()
     cleanup.cancel()
 
 
-# ---- app ----
-
 app = FastAPI(
     title="ixchio Deep Research Engine",
-    description="Multi-agent deep research with STORM perspectives, reflection loops, and adaptive search routing.",
-    version="3.0.0",
+    description="Multi-agent deep research with STORM perspectives, reflection loops, and adaptive search routing. No auth required.",
+    version="4.0.0",
     lifespan=lifespan,
 )
 
@@ -165,78 +163,64 @@ async def _find_task_by_query(query: str) -> dict | None:
             {"query": query, "status": {"$in": ["pending", "running", "completed"]}},
             {"_id": 0},
         )
-    tid = _mem_task_by_query.get(query)
-    if tid and tid in _mem_tasks:
-        t = _mem_tasks[tid]
-        if t.get("status") in ("pending", "running", "completed"):
-            return t
+    async with _tasks_lock:
+        tid = _mem_task_by_query.get(query)
+        if tid and tid in _mem_tasks:
+            t = _mem_tasks[tid]
+            if t.get("status") in ("pending", "running", "completed"):
+                return t
     return None
 
 
-# ---- auth routes ----
-
-@app.post("/auth/signup", tags=["Auth"])
-async def do_signup(req: auth.SignupRequest):
-    return await auth.signup(req)
-
-
-@app.post("/auth/login", tags=["Auth"])
-async def do_login(req: auth.LoginRequest):
-    return await auth.login(req)
-
-
-@app.get("/auth/me", tags=["Auth"])
-async def me(email: str = Depends(auth.get_current_user)):
-    info = await auth.get_user_info(email)
-    if not info:
-        raise HTTPException(404, "User not found")
-    return info
-
-
 # ---- research routes ----
+
+VALID_DEPTHS = {"shallow", "medium", "deep"}
+
 
 class ResearchRequest(BaseModel):
     query: str = Field(..., min_length=3, max_length=500)
     depth: str = Field(default="medium")
     max_sources: int = Field(default=10, ge=1, le=50)
-    mode: str = Field(default="standard")
 
 
 @app.post("/api/v1/research", tags=["Research"])
 async def create_research(
     request: ResearchRequest,
     background_tasks: BackgroundTasks,
-    user: str = Depends(auth.get_current_user),
 ):
     safe_q = sanitize_query(request.query)
+    depth = request.depth if request.depth in VALID_DEPTHS else "medium"
 
     # demo mode
     if safe_q.lower() in ("demo", "impact of quantum computing on cryptography"):
         demo_copy = DEMO_TASK_DATA.copy()
-        demo_copy["user"] = user
         demo_copy["created_at"] = _now_utc().isoformat()
         demo_copy["task_id"] = str(uuid.uuid4())
         await _save_task(demo_copy)
         return {"task_id": demo_copy["task_id"], "status": "completed", "is_demo": True}
 
-    # dedup — don't re-run identical queries
-    existing = await _find_task_by_query(safe_q)
-    if existing:
-        return {"task_id": existing["task_id"], "status": "deduplicated"}
+    # dedup — hold lock to prevent race condition
+    async with _tasks_lock:
+        existing = await _find_task_by_query(safe_q)
+        if existing:
+            return {"task_id": existing["task_id"], "status": "deduplicated"}
 
-    task_id = str(uuid.uuid4())
-    task = {
-        "task_id": task_id,
-        "status": "pending",
-        "query": safe_q,
-        "user": user,
-        "created_at": _now_utc().isoformat(),
-        "progress": 0,
-    }
+        task_id = str(uuid.uuid4())
+        task = {
+            "task_id": task_id,
+            "status": "pending",
+            "query": safe_q,
+            "depth": depth,
+            "created_at": _now_utc().isoformat(),
+            "progress": 0,
+            "current_step": "Queued",
+        }
+        _mem_task_by_query[safe_q] = task_id
+
     await _save_task(task)
-    _mem_task_by_query[safe_q] = task_id
 
     request.query = safe_q
+    request.depth = depth
     background_tasks.add_task(_run_research, task_id, request)
     return {"task_id": task_id, "status": "pending"}
 
@@ -245,6 +229,7 @@ async def _run_research(task_id: str, request: ResearchRequest):
     try:
         task = await _get_task(task_id) or {"task_id": task_id}
         task["status"] = "running"
+        task["current_step"] = "Initializing pipeline"
         await _save_task(task)
 
         result = await research_graph.run(
@@ -258,6 +243,8 @@ async def _run_research(task_id: str, request: ResearchRequest):
             "status": "completed",
             "report": result.get("report", ""),
             "progress": 100,
+            "current_step": "Done",
+            "sources": result.get("sources", []),
             "stats": {
                 "api_calls": result.get("total_api_calls", 0),
                 "cache_hits": result.get("cache_hits", 0),
@@ -287,15 +274,6 @@ async def get_research(task_id: str):
 
 @app.websocket("/ws/research/{task_id}")
 async def ws_research(ws: WebSocket, task_id: str):
-    # validate token from query param before accepting
-    token = ws.query_params.get("token")
-    if token:
-        try:
-            auth._crack_token(token)
-        except HTTPException:
-            await ws.close(code=4001)
-            return
-
     if not _is_valid_uuid(task_id):
         await ws.close(code=4000)
         return
@@ -313,6 +291,7 @@ async def ws_research(ws: WebSocket, task_id: str):
                 "progress": task.get("progress", 0),
                 "current_step": task.get("current_step", ""),
                 "report": task.get("report", ""),
+                "sources": task.get("sources", []),
                 "error": task.get("error", ""),
             })
 
@@ -339,21 +318,24 @@ async def health():
     }
 
 
-# ---- history ----
+# ---- history (all tasks, no auth) ----
 
 @app.get("/api/v1/history", tags=["Research"])
-async def get_history(user: str = Depends(auth.get_current_user)):
+async def get_history():
     db = get_db()
     if db is None:
-        user_tasks = [t for t in _mem_tasks.values() if t.get("user") == user]
-        return {"tasks": sorted(user_tasks, key=lambda x: x.get("created_at", ""), reverse=True)[:20]}
+        all_tasks = [
+            {k: t[k] for k in ("task_id", "query", "status", "created_at", "progress", "depth") if k in t}
+            for t in _mem_tasks.values()
+        ]
+        return {"tasks": sorted(all_tasks, key=lambda x: x.get("created_at", ""), reverse=True)[:50]}
 
     cursor = db.research_tasks.find(
-        {"user": user},
-        {"_id": 0, "task_id": 1, "query": 1, "status": 1, "created_at": 1, "progress": 1},
-    ).sort("created_at", -1).limit(20)
+        {},
+        {"_id": 0, "task_id": 1, "query": 1, "status": 1, "created_at": 1, "progress": 1, "depth": 1},
+    ).sort("created_at", -1).limit(50)
 
-    tasks = await cursor.to_list(length=20)
+    tasks = await cursor.to_list(length=50)
     return {"tasks": tasks}
 
 

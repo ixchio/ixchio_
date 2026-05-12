@@ -66,8 +66,8 @@ All free tier. Zero cost.
 | Provider | Model | Free Tier | Role |
 |----------|-------|-----------|------|
 | **Groq** | Llama 3.3 70B Versatile | 14,400 RPD | Report writing, synthesis |
-| **Cerebras** | Llama 3.3 70B | 1M tokens/day | Planning, reflection (speed brain) |
-| **OpenRouter** | Llama 3.2 3B | 200 RPD | Consensus voting |
+| **Cerebras** | Llama 3.1 8B | 1M tokens/day | Planning, reflection (speed brain, ~2200 tok/s) |
+| **OpenRouter** | GPT-OSS 20B | Free | Consensus voting |
 | **Tavily** | — | 1,000 credits/month | Web search (news/general) |
 | **Jina AI** | — | 10M tokens | Page extraction + search grounding |
 | **Pinecone** | — | 2GB free | Vector storage (production) |
@@ -109,30 +109,24 @@ Opens at `http://localhost:3000`. Sign up, then start researching.
 
 ## API
 
-### Auth
-
-```bash
-# signup
-curl -X POST http://localhost:8000/auth/signup \
-  -H "Content-Type: application/json" \
-  -d '{"email": "you@email.com", "password": "pass123", "name": "You"}'
-
-# returns: {"access_token": "eyJ...", "token_type": "bearer"}
-```
+No auth required. Just send requests.
 
 ### Research
 
 ```bash
-# start research (needs auth token)
+# start research
 curl -X POST http://localhost:8000/api/v1/research \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"query": "impact of quantum computing on cryptography", "depth": "medium"}'
 
+# depth options: "shallow" (fast), "medium" (balanced), "deep" (thorough)
 # returns: {"task_id": "abc-123", "status": "pending"}
 
 # check status
 curl http://localhost:8000/api/v1/research/abc-123
+
+# browse history
+curl http://localhost:8000/api/v1/history
 ```
 
 ### WebSocket
@@ -140,10 +134,12 @@ curl http://localhost:8000/api/v1/research/abc-123
 ```javascript
 const ws = new WebSocket("ws://localhost:8000/ws/research/abc-123");
 ws.onmessage = (e) => {
-  const { status, progress, report } = JSON.parse(e.data);
+  const { status, progress, current_step, report, sources } = JSON.parse(e.data);
   // status: pending → running → completed/failed
   // progress: 0-100
+  // current_step: "Planning research", "Searching", etc.
   // report: markdown string (when completed)
+  // sources: [{title, url, engine, score}] (when completed)
 };
 ```
 
@@ -152,22 +148,16 @@ ws.onmessage = (e) => {
 ## Environment Variables
 
 ```env
-# required
+# required (all free to get, no credit card)
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
 TAVILY_API_KEY=
-
-# new providers (free)
 CEREBRAS_API_KEY=
 JINA_API_KEY=
 
 # vector DB (set for production, leave empty for local ChromaDB)
 PINECONE_API_KEY=
 CHROMA_PATH=./chroma_db
-
-# auth
-JWT_SECRET=          # auto-generated if not set
-PW_SALT=ixchio-salt
 
 # server
 PORT=8000

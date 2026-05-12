@@ -134,4 +134,29 @@
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     margin: 1.5rem 0;
   }
+
+  /* --- Tables (remark-gfm) --- */
+  .research-prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+
+  .research-prose th,
+  .research-prose td {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+  }
+
+  .research-prose th {
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .research-prose tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+  }
 }

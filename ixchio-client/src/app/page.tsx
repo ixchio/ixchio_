@@ -2,189 +2,117 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send, Search, ArrowRight, LogOut, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import remarkGfm from "remark-gfm";
+import {
+  Send, Search, Loader2, AlertCircle, CheckCircle2,
+  Copy, Download, RefreshCw, Clock, ChevronDown, ExternalLink,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
+type Source = { title: string; url: string; engine: string; score: number };
 type Message = {
   role: "user" | "agent";
   content: string;
   status?: string;
   progress?: number;
+  currentStep?: string;
   timestamp?: string;
+  sources?: Source[];
+  query?: string;
 };
 
-// ---- helpers ----
-function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("ixchio_token");
-}
-function setToken(t: string) { localStorage.setItem("ixchio_token", t); }
-function clearToken() { localStorage.removeItem("ixchio_token"); }
+type HistoryItem = {
+  task_id: string;
+  query: string;
+  status: string;
+  created_at: string;
+  depth?: string;
+};
 
 function getTime() {
   return new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text);
+}
 
-// ---- auth screen ----
-function AuthScreen({ onAuth }: { onAuth: () => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+function downloadMarkdown(text: string, query: string) {
+  const blob = new Blob([text], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${query.slice(0, 40).replace(/[^a-zA-Z0-9]/g, "_")}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
-  const submit = async () => {
-    setError("");
-    if (!email.trim() || !password.trim()) {
-      setError("Email and password are required");
-      return;
-    }
-    setLoading(true);
-    try {
-      const endpoint = mode === "login" ? "/auth/login" : "/auth/signup";
-      const body: Record<string, string> = { email: email.trim(), password };
-      if (mode === "signup") body.name = name.trim();
-
-      const res = await fetch(`${API}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Authentication failed");
-      setToken(data.access_token);
-      onAuth();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setLoading(false);
-    }
-  };
-
+// ---- Sources panel ----
+function SourcesPanel({ sources }: { sources: Source[] }) {
+  const [open, setOpen] = useState(false);
+  if (!sources?.length) return null;
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center px-4">
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="w-full max-w-sm"
+    <div className="border-t border-white/[0.04]">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full px-5 py-2.5 flex items-center justify-between text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
       >
-        {/* Title */}
-        <div className="text-center mb-10">
-          <h1 className="text-2xl font-semibold text-white tracking-tight mb-1">ixchio</h1>
-          <p className="text-sm text-neutral-500">Deep research, simplified.</p>
-        </div>
-
-        {/* Mode toggle */}
-        <div className="flex mb-6 border-b border-white/10">
-          {(["login", "signup"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => { setMode(m); setError(""); }}
-              className={`flex-1 pb-3 text-sm font-medium transition-colors ${
-                mode === m
-                  ? "text-white border-b-2 border-white"
-                  : "text-neutral-500 hover:text-neutral-300"
-              }`}
-            >
-              {m === "login" ? "Sign in" : "Create account"}
-            </button>
-          ))}
-        </div>
-
-        {/* Form */}
-        <div className="space-y-3">
-          <AnimatePresence>
-            {mode === "signup" && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <input
-                  type="text"
-                  placeholder="Name"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  className="w-full bg-transparent border border-white/10 text-white text-sm px-4 py-3 rounded-lg outline-none transition-colors focus:border-white/30 placeholder:text-neutral-600"
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            className="w-full bg-transparent border border-white/10 text-white text-sm px-4 py-3 rounded-lg outline-none transition-colors focus:border-white/30 placeholder:text-neutral-600"
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && submit()}
-            className="w-full bg-transparent border border-white/10 text-white text-sm px-4 py-3 rounded-lg outline-none transition-colors focus:border-white/30 placeholder:text-neutral-600"
-          />
-        </div>
-
-        {error && (
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="mt-3 text-sm text-neutral-400 flex items-start gap-2"
+        <span>{sources.length} source{sources.length !== 1 ? "s" : ""}</span>
+        <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
           >
-            <AlertCircle size={14} className="mt-0.5 shrink-0 text-white" />
-            {error}
-          </motion.p>
+            <div className="px-5 pb-4 space-y-1.5">
+              {sources.map((s, i) => (
+                <a
+                  key={i}
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-xs text-neutral-400 hover:text-white transition-colors group"
+                >
+                  <ExternalLink size={10} className="shrink-0 opacity-40 group-hover:opacity-100" />
+                  <span className="truncate">{s.title || s.url}</span>
+                  <span className="shrink-0 text-neutral-600 text-[10px]">{s.engine}</span>
+                </a>
+              ))}
+            </div>
+          </motion.div>
         )}
-
-        <button
-          onClick={submit}
-          disabled={loading}
-          className="w-full mt-6 bg-white text-black text-sm font-medium py-3 rounded-lg transition-opacity hover:opacity-90 disabled:opacity-40 flex items-center justify-center gap-2"
-        >
-          {loading ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : (
-            <>
-              {mode === "login" ? "Sign in" : "Create account"}
-              <ArrowRight size={14} />
-            </>
-          )}
-        </button>
-
-        <p className="text-center text-neutral-600 text-xs mt-6">
-          {mode === "login" ? "No account? " : "Already have an account? "}
-          <button
-            onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
-            className="text-white hover:underline"
-          >
-            {mode === "login" ? "Create one" : "Sign in"}
-          </button>
-        </p>
-      </motion.div>
+      </AnimatePresence>
     </div>
   );
 }
 
 
-// ---- main ----
 export default function Home() {
-  const [authed, setAuthed] = useState(false);
   const [query, setQuery] = useState("");
+  const [depth, setDepth] = useState<"shallow" | "medium" | "deep">("medium");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [copied, setCopied] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { setAuthed(!!getToken()); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  // fetch history on mount
+  useEffect(() => {
+    fetch(`${API}/api/v1/history`).then(r => r.json()).then(d => {
+      if (d.tasks) setHistory(d.tasks);
+    }).catch(() => {});
+  }, [messages]);
 
   const handleWSData = useCallback((data: Record<string, unknown>) => {
     setMessages(prev => {
@@ -196,17 +124,19 @@ export default function Home() {
         last.content = data.report as string;
         last.status = "completed";
         last.progress = 100;
+        last.currentStep = "Done";
+        last.sources = (data.sources as Source[]) || [];
         setIsSearching(false);
       } else if (data.status === "failed") {
         last.content = (data.error as string) || "Research failed";
         last.status = "error";
         setIsSearching(false);
       } else {
-        last.status = data.current_step as string;
+        last.currentStep = (data.current_step as string) || "Processing...";
         last.progress = data.progress as number;
         last.content = (data.current_step as string) || "Processing...";
       }
-      return updated;
+      return [...updated];
     });
   }, []);
 
@@ -228,46 +158,39 @@ export default function Home() {
   const connectWS = useCallback((taskId: string) => {
     const wsProto = API.startsWith("https") ? "wss" : "ws";
     const wsHost = API.replace(/^https?:\/\//, "");
-    const token = getToken();
-    const wsUrl = `${wsProto}://${wsHost}/ws/research/${taskId}${token ? `?token=${token}` : ""}`;
+    const wsUrl = `${wsProto}://${wsHost}/ws/research/${taskId}`;
     const ws = new WebSocket(wsUrl);
     ws.onmessage = (ev) => handleWSData(JSON.parse(ev.data));
     ws.onerror = () => { ws.close(); pollTask(taskId); };
   }, [handleWSData, pollTask]);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim() || isSearching) return;
+  const startResearch = async (q: string, d: string = depth) => {
+    if (!q.trim() || isSearching) return;
 
-    const q = query.trim();
     setQuery("");
     setMessages(prev => [
       ...prev,
       { role: "user", content: q, timestamp: getTime() },
-      { role: "agent", content: "Starting research...", status: "starting", progress: 0, timestamp: getTime() },
+      { role: "agent", content: "Starting research...", status: "starting", progress: 0, currentStep: "Queued", timestamp: getTime(), query: q },
     ]);
     setIsSearching(true);
 
     try {
-      const token = getToken();
       const res = await fetch(`${API}/api/v1/research`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ query: q, depth: "medium", max_sources: 10, mode: "standard" }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, depth: d, max_sources: 10 }),
       });
-
-      if (res.status === 401) {
-        clearToken();
-        setAuthed(false);
-        setIsSearching(false);
-        return;
-      }
-
       const data = await res.json();
-      if (data.task_id) connectWS(data.task_id);
+
+      if (data.status === "completed" && data.is_demo) {
+        // demo returns instantly — fetch the full task
+        const taskRes = await fetch(`${API}/api/v1/research/${data.task_id}`);
+        const taskData = await taskRes.json();
+        handleWSData(taskData);
+      } else if (data.task_id) {
+        connectWS(data.task_id);
+      }
     } catch {
       setMessages(prev => {
         const updated = [...prev];
@@ -276,13 +199,40 @@ export default function Home() {
           last.content = "Could not reach backend. Is the server running?";
           last.status = "error";
         }
-        return updated;
+        return [...updated];
       });
       setIsSearching(false);
     }
   };
 
-  if (!authed) return <AuthScreen onAuth={() => setAuthed(true)} />;
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    startResearch(query.trim());
+  };
+
+  const retryQuery = (q: string) => startResearch(q);
+
+  const handleCopy = (text: string, idx: number) => {
+    copyToClipboard(text);
+    setCopied(idx);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const loadFromHistory = async (item: HistoryItem) => {
+    try {
+      const res = await fetch(`${API}/api/v1/research/${item.task_id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.report) {
+        setMessages(prev => [
+          ...prev,
+          { role: "user", content: item.query, timestamp: getTime() },
+          { role: "agent", content: data.report, status: "completed", progress: 100, timestamp: getTime(), sources: data.sources || [] },
+        ]);
+      }
+      setShowHistory(false);
+    } catch {}
+  };
 
   return (
     <div className="flex flex-col h-screen bg-black text-white">
@@ -297,14 +247,50 @@ export default function Home() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => { clearToken(); setAuthed(false); }}
-          className="text-neutral-500 hover:text-white transition-colors p-1.5 rounded-md hover:bg-white/5"
-          title="Sign out"
-        >
-          <LogOut size={14} />
-        </button>
+        <div className="flex items-center gap-2">
+          {history.length > 0 && (
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className="text-neutral-500 hover:text-white transition-colors p-1.5 rounded-md hover:bg-white/5 flex items-center gap-1.5 text-xs"
+              title="Research history"
+            >
+              <Clock size={13} />
+              <span className="hidden sm:inline">History</span>
+            </button>
+          )}
+        </div>
       </header>
+
+      {/* History dropdown */}
+      <AnimatePresence>
+        {showHistory && history.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="border-b border-white/[0.06] overflow-hidden"
+          >
+            <div className="px-4 md:px-6 py-3 max-h-48 overflow-y-auto space-y-1">
+              {history.map((item) => (
+                <button
+                  key={item.task_id}
+                  onClick={() => loadFromHistory(item)}
+                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 transition-colors group"
+                >
+                  <p className="text-xs text-neutral-300 truncate group-hover:text-white">{item.query}</p>
+                  <p className="text-[10px] text-neutral-600 mt-0.5 flex items-center gap-2">
+                    <span className={item.status === "completed" ? "text-emerald-600" : item.status === "failed" ? "text-red-500" : "text-neutral-500"}>
+                      {item.status}
+                    </span>
+                    {item.depth && <span>• {item.depth}</span>}
+                    <span>• {new Date(item.created_at).toLocaleDateString()}</span>
+                  </p>
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Chat area */}
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 lg:px-16 pb-40">
@@ -322,7 +308,7 @@ export default function Home() {
               <p className="text-neutral-500 text-sm leading-relaxed max-w-md">
                 Multi-agent deep research engine. Enter a topic below and get a comprehensive, source-backed report.
               </p>
-              <div className="flex items-center justify-center gap-4 pt-2 text-xs text-neutral-600">
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-2 text-xs text-neutral-600">
                 <span>STORM analysis</span>
                 <span className="w-1 h-1 bg-neutral-700 rounded-full" />
                 <span>Adaptive search</span>
@@ -353,7 +339,7 @@ export default function Home() {
                       <div className="flex items-center gap-3">
                         <Loader2 size={16} className="animate-spin text-neutral-400" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm text-neutral-300 truncate">{msg.content}</p>
+                          <p className="text-sm text-neutral-300 truncate">{msg.currentStep || msg.content}</p>
                           <div className="mt-2.5 h-[2px] bg-white/[0.04] rounded-full overflow-hidden">
                             <motion.div
                               className="h-full bg-white/30 rounded-full"
@@ -369,24 +355,51 @@ export default function Home() {
                       </div>
                     </div>
                   ) : msg.status === "error" ? (
-                    <div className="border border-white/[0.06] rounded-xl px-5 py-4">
+                    <div className="border border-red-500/20 rounded-xl px-5 py-4">
                       <div className="flex items-start gap-2">
-                        <AlertCircle size={14} className="mt-0.5 text-neutral-400 shrink-0" />
-                        <p className="text-sm text-neutral-400">{msg.content}</p>
+                        <AlertCircle size={14} className="mt-0.5 text-red-400 shrink-0" />
+                        <div className="flex-1">
+                          <p className="text-sm text-red-300">{msg.content}</p>
+                          {msg.query && (
+                            <button
+                              onClick={() => retryQuery(msg.query!)}
+                              className="mt-2 flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white transition-colors"
+                            >
+                              <RefreshCw size={11} /> Retry
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : (
                     <div className="border border-white/[0.06] rounded-xl overflow-hidden">
                       <div className="px-5 py-3 border-b border-white/[0.04] flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <CheckCircle2 size={13} className="text-neutral-500" />
+                          <CheckCircle2 size={13} className="text-emerald-600" />
                           <span className="text-xs text-neutral-500">Research complete</span>
                         </div>
-                        <span className="text-[10px] text-neutral-600">{msg.timestamp}</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleCopy(msg.content, i)}
+                            className="p-1.5 rounded-md text-neutral-500 hover:text-white hover:bg-white/5 transition-colors"
+                            title="Copy markdown"
+                          >
+                            {copied === i ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                          </button>
+                          <button
+                            onClick={() => downloadMarkdown(msg.content, messages[i - 1]?.content || "research")}
+                            className="p-1.5 rounded-md text-neutral-500 hover:text-white hover:bg-white/5 transition-colors"
+                            title="Download .md"
+                          >
+                            <Download size={12} />
+                          </button>
+                          <span className="text-[10px] text-neutral-600 ml-1">{msg.timestamp}</span>
+                        </div>
                       </div>
                       <div className="px-5 py-6 md:px-8 research-prose text-sm">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                       </div>
+                      <SourcesPanel sources={msg.sources || []} />
                     </div>
                   )}
                 </motion.div>
@@ -407,14 +420,28 @@ export default function Home() {
                 <Search size={16} />
               </div>
               <input
+                ref={inputRef}
                 type="text"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder="What would you like to research?"
                 disabled={isSearching}
+                maxLength={500}
                 spellCheck={false}
-                className="flex-1 bg-transparent text-white text-sm pl-3 pr-3 py-3.5 md:py-4 outline-none placeholder:text-neutral-600 disabled:opacity-40"
+                className="flex-1 bg-transparent text-white text-sm pl-3 pr-1 py-3.5 md:py-4 outline-none placeholder:text-neutral-600 disabled:opacity-40"
               />
+              {/* Depth selector */}
+              <select
+                value={depth}
+                onChange={e => setDepth(e.target.value as "shallow" | "medium" | "deep")}
+                disabled={isSearching}
+                className="bg-transparent text-neutral-500 text-[11px] border-none outline-none cursor-pointer hover:text-white transition-colors disabled:opacity-40 mr-1 appearance-none text-center"
+                title="Research depth"
+              >
+                <option value="shallow" className="bg-black">⚡ Quick</option>
+                <option value="medium" className="bg-black">⚖️ Standard</option>
+                <option value="deep" className="bg-black">🔬 Deep</option>
+              </select>
               <button
                 type="submit"
                 disabled={!query.trim() || isSearching}
@@ -426,16 +453,23 @@ export default function Home() {
           </form>
 
           <div className="flex items-center justify-center gap-3 mt-2.5 text-[10px] text-neutral-600">
-            <span>v3.0</span>
+            <span>v4.0</span>
             <span className="w-0.5 h-0.5 bg-neutral-700 rounded-full" />
             <button
               type="button"
-              onClick={() => setQuery("demo")}
-              className="text-neutral-400 hover:text-white transition-colors"
+              onClick={() => startResearch("demo")}
+              disabled={isSearching}
+              className="text-neutral-400 hover:text-white transition-colors disabled:opacity-40"
               title="Load demo research"
             >
               Try demo
             </button>
+            {query.length > 0 && (
+              <>
+                <span className="w-0.5 h-0.5 bg-neutral-700 rounded-full" />
+                <span className={query.length > 450 ? "text-red-400" : ""}>{query.length}/500</span>
+              </>
+            )}
           </div>
         </div>
       </div>

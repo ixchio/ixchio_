@@ -17,7 +17,7 @@ class CerebrasClient:
         self.base_url = "https://api.cerebras.ai/v1/chat/completions"
         self.rate_limiter = rate_limiter
         self.circuit_breaker = circuit_breaker
-        self.model = "llama-3.3-70b"
+        self.model = "llama3.1-8b"
         self._session: aiohttp.ClientSession | None = None
 
     def _get_session(self) -> aiohttp.ClientSession:

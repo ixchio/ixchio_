@@ -17,7 +17,7 @@ class OpenRouterClient:
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         self.rate_limiter = rate_limiter
         self.circuit_breaker = circuit_breaker
-        self.model = "meta-llama/llama-3.2-3b-instruct:free"
+        self.model = "openai/gpt-oss-20b:free"
         self._session: aiohttp.ClientSession | None = None
 
     def _get_session(self) -> aiohttp.ClientSession:

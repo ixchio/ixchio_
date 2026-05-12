@@ -9,11 +9,12 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "ixchio — Deep Research",
-  description: "Autonomous research assistant. Multi-agent deep research with adaptive search and reflection.",
+  title: "ixchio — Deep Research Engine",
+  description: "Multi-agent deep research engine with STORM perspectives, adaptive search, and reflection loops. No signup required.",
+  icons: { icon: "/logo.svg" },
   openGraph: {
-    title: "ixchio — Deep Research",
-    description: "Autonomous multi-agent research assistant.",
+    title: "ixchio — Deep Research Engine",
+    description: "Free multi-agent research engine. Get comprehensive, source-backed reports on any topic.",
     type: "website",
   },
 };
