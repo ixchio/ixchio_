@@ -30,7 +30,7 @@ from core.circuit_breaker import CircuitBreaker
 from core.rate_limiter import RateLimiter
 from core.vector_db import PersistentVectorDB
 
-from clients import GroqClient, OpenRouterClient, TavilyClient, CerebrasClient, JinaClient
+from clients import GroqClient, OpenRouterClient, TavilyClient, CerebrasClient, JinaClient, DuckDuckGoClient
 
 DEPTH_CONFIG = {
     "shallow": {"sub_queries": 3, "search_per_q": 2, "extract_top": 2, "max_reflect": 0},
@@ -47,6 +47,7 @@ class DeepResearchGraph:
         self.tavily = TavilyClient(rl, CircuitBreaker())
         self.cerebras = CerebrasClient(rl, CircuitBreaker())
         self.jina = JinaClient(rl, CircuitBreaker())
+        self.ddg = DuckDuckGoClient(rl, CircuitBreaker())
         self._clients = [self.groq, self.openrouter, self.tavily, self.cerebras, self.jina]
         self.cache = SemanticCache()
         self.vector_db = vector_db or PersistentVectorDB()
@@ -209,7 +210,10 @@ class DeepResearchGraph:
                     for h in await self.jina.search(q):
                         hits.append({**h, "source_engine": "jina"})
                 else:
-                    resp = await self.tavily.search(q, max_results=cfg["search_per_q"])
+                    try:
+                        resp = await self.tavily.search(q, max_results=cfg["search_per_q"])
+                    except Exception:
+                        resp = await self.ddg.search(q, max_results=cfg["search_per_q"])
                     for r in resp.get("results", []):
                         hits.append({
                             "title": r.get("title", ""), "url": r.get("url", ""),
@@ -286,7 +290,10 @@ class DeepResearchGraph:
             q = item["query"] if isinstance(item, dict) else str(item)
             hits = []
             try:
-                resp = await self.tavily.search(q, max_results=2)
+                try:
+                    resp = await self.tavily.search(q, max_results=2)
+                except Exception:
+                    resp = await self.ddg.search(q, max_results=2)
                 for r in resp.get("results", []):
                     hits.append({
                         "title": r.get("title", ""), "url": r.get("url", ""),
@@ -581,8 +588,12 @@ class DeepResearchGraph:
         new_facts = []
         for gap in gaps[:3]:
             try:
-                resp = await self.tavily.search(
-                    f"{state['query']} {gap}", max_results=2)
+                try:
+                    resp = await self.tavily.search(
+                        f"{state['query']} {gap}", max_results=2)
+                except Exception:
+                    resp = await self.ddg.search(
+                        f"{state['query']} {gap}", max_results=2)
                 for r in resp.get("results", []):
                     new_facts.append(r.get("content", "")[:300])
                 state["total_api_calls"] += 1

@@ -3,6 +3,7 @@ from clients.openrouter import OpenRouterClient
 from clients.tavily import TavilyClient
 from clients.cerebras import CerebrasClient
 from clients.jina import JinaClient
+from clients.duckduckgo import DuckDuckGoClient
 
 __all__ = [
     "GroqClient",
@@ -10,4 +11,5 @@ __all__ = [
     "TavilyClient",
     "CerebrasClient",
     "JinaClient",
+    "DuckDuckGoClient",
 ]
