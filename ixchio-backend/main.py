@@ -199,22 +199,35 @@ async def create_research(
         await _save_task(demo_copy)
         return {"task_id": demo_copy["task_id"], "status": "completed", "is_demo": True}
 
-    # dedup — hold lock to prevent race condition
-    async with _tasks_lock:
-        existing = await _find_task_by_query(safe_q)
+    # dedup check (mongo path doesn't need a lock)
+    db = get_db()
+    if db is not None:
+        existing = await db.research_tasks.find_one(
+            {"query": safe_q, "status": {"$in": ["pending", "running", "completed"]}},
+            {"_id": 0},
+        )
         if existing:
             return {"task_id": existing["task_id"], "status": "deduplicated"}
+    else:
+        async with _tasks_lock:
+            tid = _mem_task_by_query.get(safe_q)
+            if tid and tid in _mem_tasks:
+                t = _mem_tasks[tid]
+                if t.get("status") in ("pending", "running", "completed"):
+                    return {"task_id": t["task_id"], "status": "deduplicated"}
 
-        task_id = str(uuid.uuid4())
-        task = {
-            "task_id": task_id,
-            "status": "pending",
-            "query": safe_q,
-            "depth": depth,
-            "created_at": _now_utc().isoformat(),
-            "progress": 0,
-            "current_step": "Queued",
-        }
+    task_id = str(uuid.uuid4())
+    task = {
+        "task_id": task_id,
+        "status": "pending",
+        "query": safe_q,
+        "depth": depth,
+        "created_at": _now_utc().isoformat(),
+        "progress": 0,
+        "current_step": "Queued",
+    }
+
+    async with _tasks_lock:
         _mem_task_by_query[safe_q] = task_id
 
     await _save_task(task)
