@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from core.helpers import sanitize_query
-from core.vector_db import PersistentVectorDB
 from core.db import get_db, ensure_indexes, ping as mongo_ping
 from core.demo_data import DEMO_TASK_DATA
 from pipeline.graph import DeepResearchGraph
@@ -106,8 +105,9 @@ async def lifespan(app: FastAPI):
         vdb = PineconeDB()
         logger.info("pinecone loaded")
     else:
-        vdb = PersistentVectorDB()
-        logger.info("local chromadb")
+        from core.lightweight_vdb import LightweightVectorDB
+        vdb = LightweightVectorDB()
+        logger.info("lightweight in-memory vector DB (no torch/chromadb)")
 
     research_graph = DeepResearchGraph(vector_db=vdb)
     cleanup = asyncio.create_task(_evict_old_tasks())

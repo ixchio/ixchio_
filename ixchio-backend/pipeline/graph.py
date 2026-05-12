@@ -28,7 +28,7 @@ from core.helpers import extract_json
 from core.cache import SemanticCache
 from core.circuit_breaker import CircuitBreaker
 from core.rate_limiter import RateLimiter
-from core.vector_db import PersistentVectorDB
+from core.lightweight_vdb import LightweightVectorDB
 
 from clients import GroqClient, OpenRouterClient, TavilyClient, CerebrasClient, JinaClient, DuckDuckGoClient
 
@@ -50,7 +50,7 @@ class DeepResearchGraph:
         self.ddg = DuckDuckGoClient(rl, CircuitBreaker())
         self._clients = [self.groq, self.openrouter, self.tavily, self.cerebras, self.jina]
         self.cache = SemanticCache()
-        self.vector_db = vector_db or PersistentVectorDB()
+        self.vector_db = vector_db or LightweightVectorDB()
         self.graph = self._wire_graph()
 
     async def close(self):
