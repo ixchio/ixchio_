@@ -245,11 +245,19 @@ async def _run_research(task_id: str, request: ResearchRequest):
         task["current_step"] = "Initializing pipeline"
         await _save_task(task)
 
+        async def _on_progress(progress: int, step: str):
+            t = await _get_task(task_id)
+            if t:
+                t["progress"] = progress
+                t["current_step"] = step
+                await _save_task(t)
+
         result = await research_graph.run(
             query=request.query,
             depth=request.depth,
             max_sources=request.max_sources,
             task_id=task_id,
+            on_progress=_on_progress,
         )
 
         task.update({

@@ -43,7 +43,12 @@ const DEPTH_LABELS = { shallow: "Quick", medium: "Standard", deep: "Deep" } as c
 /* ── hooks ── */
 function useTheme() {
   const [dark, setDark] = useState(false);
-  useEffect(() => { setDark(document.documentElement.classList.contains("dark")); }, []);
+  useEffect(() => {
+    const saved = localStorage.getItem("theme");
+    const prefersDark = saved === "dark" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    setDark(prefersDark);
+    document.documentElement.classList.toggle("dark", prefersDark);
+  }, []);
   const toggle = () => {
     const next = !dark;
     setDark(next);
@@ -192,9 +197,11 @@ export default function Home() {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-  useEffect(() => {
+
+  const fetchHistory = useCallback(() => {
     fetch(`${API}/api/v1/history`).then(r => r.json()).then(d => d.tasks && setHistory(d.tasks)).catch(() => {});
-  }, [messages]);
+  }, []);
+  useEffect(fetchHistory, [fetchHistory]);
 
   const onData = useCallback((d: Record<string, unknown>) => {
     setMessages(prev => {
@@ -207,6 +214,7 @@ export default function Home() {
         last.progress = 100;
         last.sources = (d.sources as Source[]) || [];
         setSearching(false);
+        fetchHistory();
       } else if (d.status === "failed") {
         last.content = (d.error as string) || "Research failed.";
         last.status = "error";
@@ -217,7 +225,7 @@ export default function Home() {
       }
       return [...msgs];
     });
-  }, []);
+  }, [fetchHistory]);
 
   const poll = useCallback((id: string) => {
     const iv = setInterval(async () => {
@@ -234,9 +242,15 @@ export default function Home() {
   const ws = useCallback((id: string) => {
     const p = API.startsWith("https") ? "wss" : "ws";
     const h = API.replace(/^https?:\/\//, "");
+    let completed = false;
     const sock = new WebSocket(`${p}://${h}/ws/research/${id}`);
-    sock.onmessage = (e) => onData(JSON.parse(e.data));
-    sock.onerror = () => { sock.close(); poll(id); };
+    sock.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      onData(d);
+      if (d.status === "completed" || d.status === "failed") completed = true;
+    };
+    sock.onerror = () => { sock.close(); if (!completed) poll(id); };
+    sock.onclose = () => { if (!completed) poll(id); };
   }, [onData, poll]);
 
   const go = async (q: string) => {
@@ -254,6 +268,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: text, depth, max_sources: 10 }),
       });
+      if (!r.ok) throw new Error(`Server error (${r.status})`);
       const d = await r.json();
       if (d.status === "completed" && d.is_demo) {
         const tr = await fetch(`${API}/api/v1/research/${d.task_id}`);
@@ -331,7 +346,7 @@ export default function Home() {
             autoFocus variant="home" />
           <div className="mt-5 flex items-center justify-center gap-2 flex-wrap">
             {["How does mRNA vaccine technology work", "Latest advances in nuclear fusion", "Impact of AI on job markets 2025"].map(q => (
-              <button key={q} onClick={() => { setQuery(q); }}
+              <button key={q} onClick={() => go(q)}
                 className="px-3 py-1.5 rounded-lg text-[11px] transition-colors"
                 style={{ color: "var(--muted)", background: "var(--surface)", border: "1px solid var(--border2)" }}>
                 {q.length > 35 ? q.slice(0, 35) + "…" : q}

@@ -97,6 +97,11 @@ class DeepResearchGraph:
     def _cfg(self, state: ResearchState) -> dict:
         return DEPTH_CONFIG.get(state.get("depth", "medium"), DEPTH_CONFIG["medium"])
 
+    async def _notify(self, state: ResearchState):
+        cb = getattr(self, "_on_progress", None)
+        if cb:
+            await cb(state.get("progress", 0), state.get("current_step", ""))
+
     # ---- routing helpers ----
 
     def _retry_or_proceed(self, state: ResearchState) -> str:
@@ -122,6 +127,7 @@ class DeepResearchGraph:
     async def _plan(self, state: ResearchState) -> ResearchState:
         cfg = self._cfg(state)
         state["current_step"] = "Planning research"
+        await self._notify(state)
 
         async def _do_plan():
             prompt = (
@@ -155,6 +161,7 @@ class DeepResearchGraph:
 
     async def _storm_perspectives(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Generating expert perspectives"
+        await self._notify(state)
         prompt = (
             f"Topic: '{state['query']}'\n"
             f"Create 3 expert personas with different angles on this topic.\n"
@@ -192,6 +199,7 @@ class DeepResearchGraph:
     async def _parallel_search(self, state: ResearchState) -> ResearchState:
         cfg = self._cfg(state)
         state["current_step"] = f"Searching in parallel (round {state['search_round']})"
+        await self._notify(state)
 
         plan = state.get("research_plan") or {}
         queries = plan.get("search_queries", [{"query": state["query"], "type": "general"}])
@@ -241,6 +249,7 @@ class DeepResearchGraph:
 
     async def _gap_analysis(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Analyzing coverage gaps"
+        await self._notify(state)
         results = state.get("search_results") or []
         if not results or state["search_round"] > 1:
             state["reflection_gaps"] = []
@@ -279,6 +288,7 @@ class DeepResearchGraph:
 
     async def _targeted_search(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Filling coverage gaps"
+        await self._notify(state)
         plan = state.get("research_plan") or {}
         gap_queries = plan.get("gap_queries", [])
         if not gap_queries:
@@ -319,6 +329,7 @@ class DeepResearchGraph:
 
     async def _rerank(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Reranking sources by relevance"
+        await self._notify(state)
         results = state.get("search_results") or []
         if len(results) <= 3:
             state["reranked_results"] = results
@@ -370,6 +381,7 @@ class DeepResearchGraph:
     async def _deep_extract(self, state: ResearchState) -> ResearchState:
         cfg = self._cfg(state)
         state["current_step"] = "Extracting full page content"
+        await self._notify(state)
         ranked = state.get("reranked_results") or state.get("search_results") or []
 
         top_urls, seen = [], set()
@@ -413,6 +425,7 @@ class DeepResearchGraph:
 
     async def _synthesize(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Synthesizing findings"
+        await self._notify(state)
         texts = [f["fact"] for f in state["extracted_data"]]
         for de in (state.get("deep_extractions") or []):
             texts.append(de["full_content"][:500])
@@ -450,6 +463,7 @@ class DeepResearchGraph:
 
     async def _write_report(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Writing report"
+        await self._notify(state)
         facts = "\n".join(state["synthesized_content"]["key_facts"][:12])
 
         expert_block = ""
@@ -491,6 +505,7 @@ class DeepResearchGraph:
 
     async def _verify_citations(self, state: ResearchState) -> ResearchState:
         state["current_step"] = "Verifying citations"
+        await self._notify(state)
         report = state.get("report", "")
         if len(report.split()) < 50:
             state["citation_report"] = {"verified": 0, "unsupported": []}
@@ -611,7 +626,8 @@ class DeepResearchGraph:
     # ---- Public entrypoint ----
 
     async def run(self, query: str, depth: str = "medium",
-                  max_sources: int = 10, task_id: str = None) -> ResearchState:
+                  max_sources: int = 10, task_id: str = None,
+                  on_progress=None) -> ResearchState:
         initial = ResearchState(
             query=query, depth=depth, max_sources=max_sources,
             task_id=task_id or str(uuid.uuid4()),
@@ -624,4 +640,5 @@ class DeepResearchGraph:
             search_retry_count=0, search_round=1, reflection_count=0,
             errors=[], cache_hits=0, total_api_calls=0,
         )
+        self._on_progress = on_progress
         return await self.graph.ainvoke(initial)
