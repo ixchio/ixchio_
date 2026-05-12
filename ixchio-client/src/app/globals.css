@@ -4,159 +4,59 @@
   --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
 }
 
-/* ========== BASE ========== */
 @layer base {
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    scrollbar-color: #d4d4d4 transparent;
   }
-  *::-webkit-scrollbar { width: 5px; }
+  *::-webkit-scrollbar { width: 4px; }
   *::-webkit-scrollbar-track { background: transparent; }
-  *::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 3px;
-  }
-  *::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+  *::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 2px; }
 
-  body {
-    background-color: #000;
-    color: #e5e5e5;
-  }
-
-  ::selection {
-    background: rgba(255, 255, 255, 0.2);
-    color: #fff;
-  }
+  body { background: #fff; color: #111; }
+  ::selection { background: #111; color: #fff; }
 }
 
-/* ========== KEYFRAMES ========== */
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-@keyframes pulse-dot {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* ========== UTILITIES ========== */
 @layer utilities {
-
-  /* --- Prose styles for research output --- */
-  .research-prose {
-    color: #d4d4d4;
-    line-height: 1.75;
+  .prose {
+    color: #1a1a1a;
+    line-height: 1.8;
   }
-
-  .research-prose h1,
-  .research-prose h2,
-  .research-prose h3 {
-    color: #fff;
+  .prose h1, .prose h2, .prose h3 {
+    color: #000;
     font-weight: 600;
-    margin-top: 1.75rem;
-    margin-bottom: 0.75rem;
-    letter-spacing: -0.01em;
+    margin-top: 2rem;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.02em;
   }
-
-  .research-prose h1 {
-    font-size: 1.5rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  .prose h1 { font-size: 1.5rem; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.5rem; }
+  .prose h2 { font-size: 1.2rem; }
+  .prose h3 { font-size: 1.05rem; }
+  .prose p { margin: 0.6rem 0; }
+  .prose a { color: #111; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: #aaa; }
+  .prose a:hover { text-decoration-color: #111; }
+  .prose strong { color: #000; font-weight: 600; }
+  .prose code {
+    background: #f5f5f5; border: 1px solid #e5e5e5; border-radius: 3px;
+    padding: 1px 4px; font-size: 0.85em; font-family: ui-monospace, monospace;
   }
-
-  .research-prose h2 {
-    font-size: 1.25rem;
-    padding-bottom: 0.4rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  .prose pre {
+    background: #fafafa !important; border: 1px solid #e5e5e5; border-radius: 6px;
+    padding: 1rem; overflow-x: auto;
   }
-
-  .research-prose h3 { font-size: 1.1rem; }
-
-  .research-prose p { margin: 0.75rem 0; }
-
-  .research-prose a {
-    color: #fff;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-    text-decoration-color: rgba(255, 255, 255, 0.3);
-    transition: text-decoration-color 0.2s;
+  .prose pre code { background: none; border: none; padding: 0; }
+  .prose blockquote {
+    border-left: 2px solid #d4d4d4; padding-left: 1rem; color: #666; margin: 1rem 0;
   }
-  .research-prose a:hover { text-decoration-color: #fff; }
-
-  .research-prose strong { color: #fff; font-weight: 600; }
-
-  .research-prose code {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 4px;
-    padding: 1px 5px;
-    font-size: 0.875em;
-    font-family: ui-monospace, monospace;
-  }
-
-  .research-prose pre {
-    background: rgba(255, 255, 255, 0.03) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    padding: 1rem;
-    overflow-x: auto;
-  }
-
-  .research-prose pre code {
-    background: none;
-    border: none;
-    padding: 0;
-  }
-
-  .research-prose blockquote {
-    border-left: 2px solid rgba(255, 255, 255, 0.2);
-    padding-left: 1rem;
-    color: #a3a3a3;
-    margin: 1rem 0;
-  }
-
-  .research-prose ul, .research-prose ol {
-    padding-left: 1.5rem;
-    margin: 0.75rem 0;
-  }
-
-  .research-prose li { margin: 0.25rem 0; }
-  .research-prose ul li::marker { color: rgba(255, 255, 255, 0.3); }
-  .research-prose ol li::marker { color: rgba(255, 255, 255, 0.4); }
-
-  .research-prose hr {
-    border: none;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    margin: 1.5rem 0;
-  }
-
-  /* --- Tables (remark-gfm) --- */
-  .research-prose table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1rem 0;
-    font-size: 0.85rem;
-  }
-
-  .research-prose th,
-  .research-prose td {
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-  }
-
-  .research-prose th {
-    background: rgba(255, 255, 255, 0.04);
-    color: #fff;
-    font-weight: 600;
-  }
-
-  .research-prose tr:nth-child(even) {
-    background: rgba(255, 255, 255, 0.02);
-  }
+  .prose ul, .prose ol { padding-left: 1.5rem; margin: 0.6rem 0; }
+  .prose li { margin: 0.2rem 0; }
+  .prose ul li::marker { color: #999; }
+  .prose ol li::marker { color: #666; }
+  .prose hr { border: none; border-top: 1px solid #e5e5e5; margin: 1.5rem 0; }
+  .prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+  .prose th, .prose td { border: 1px solid #e5e5e5; padding: 0.5rem 0.75rem; text-align: left; }
+  .prose th { background: #fafafa; color: #000; font-weight: 600; }
+  .prose tr:nth-child(even) { background: #fafafa; }
 }
