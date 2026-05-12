@@ -27,7 +27,7 @@ All of that runs as a single LangGraph pipeline. You get a WebSocket stream of p
 
 ```
 ixchio/
-├── ixchio-backend/      ← FastAPI backend
+├── ixchio-backend/       ← FastAPI backend
 │   ├── main.py          ← App entrypoint (~200 lines)
 │   ├── auth.py          ← JWT signup/login
 │   ├── clients/         ← API provider clients
@@ -78,8 +78,8 @@ All free tier. Zero cost.
 
 ```bash
 # 1. clone
-git clone https://github.com/ixchio/deep-research-engine.git
-cd deep-research-engine
+git clone https://github.com/ixchio/ixchio.git
+cd ixchio
 
 # 2. backend setup
 cd ixchio-backend

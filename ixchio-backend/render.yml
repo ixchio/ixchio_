@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: langgraph-research-assistant
+    name: ixchio-backend
     env: python
     region: oregon
     plan: free
