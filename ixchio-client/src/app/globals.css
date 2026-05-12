@@ -6,59 +6,78 @@
 
 @layer base {
   * { scrollbar-width: thin; scrollbar-color: var(--sc) transparent; }
-  *::-webkit-scrollbar { width: 4px; }
+  *::-webkit-scrollbar { width: 5px; }
   *::-webkit-scrollbar-track { background: transparent; }
-  *::-webkit-scrollbar-thumb { background: var(--sc); border-radius: 2px; }
+  *::-webkit-scrollbar-thumb { background: var(--sc); border-radius: 3px; }
 
   :root {
-    --bg: #fff; --fg: #111; --fg2: #1a1a1a; --muted: #999; --muted2: #666;
-    --border: #e5e5e5; --border2: #f5f5f5; --surface: #fafafa;
-    --sc: #d4d4d4; --accent: #000; --accent-fg: #fff;
-    --ph: #bbb; --hover: #f5f5f5;
+    --bg: #ffffff; --bg2: #f8f8f8; --fg: #0f0f0f; --fg2: #1a1a1a; --muted: #8a8a8a; --muted2: #5c5c5c;
+    --border: #e8e8e8; --border2: #f0f0f0; --surface: #f5f5f5;
+    --sc: #d0d0d0; --accent: #0f0f0f; --accent-fg: #fff;
+    --ph: #b0b0b0; --hover: #f0f0f0; --glow: rgba(0,0,0,.04);
+    --ring: rgba(0,0,0,.08); --bar: #0f0f0f; --bar-track: #e8e8e8;
+    --src-bg: #f7f7f7; --src-hover: #ececec;
+    --step-dot: #0f0f0f; --step-line: #e0e0e0; --step-done: #0f0f0f;
   }
   .dark {
-    --bg: #0a0a0a; --fg: #e5e5e5; --fg2: #d4d4d4; --muted: #666; --muted2: #888;
-    --border: #1f1f1f; --border2: #181818; --surface: #141414;
-    --sc: #333; --accent: #e5e5e5; --accent-fg: #0a0a0a;
-    --ph: #444; --hover: #1a1a1a;
+    --bg: #09090b; --bg2: #0f0f11; --fg: #ebebeb; --fg2: #d4d4d4; --muted: #5a5a5a; --muted2: #8a8a8a;
+    --border: #1c1c1e; --border2: #151517; --surface: #121214;
+    --sc: #2a2a2c; --accent: #ebebeb; --accent-fg: #09090b;
+    --ph: #3a3a3c; --hover: #17171a; --glow: rgba(255,255,255,.02);
+    --ring: rgba(255,255,255,.06); --bar: #ebebeb; --bar-track: #1c1c1e;
+    --src-bg: #111113; --src-hover: #1a1a1d;
+    --step-dot: #ebebeb; --step-line: #222225; --step-done: #ebebeb;
   }
 
-  body { background: var(--bg); color: var(--fg); transition: background 0.2s, color 0.2s; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--fg); transition: background .15s, color .15s; }
   ::selection { background: var(--accent); color: var(--accent-fg); }
+  input::placeholder, textarea::placeholder { color: var(--ph); }
 }
 
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pulse-bar { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 
 @layer utilities {
-  .prose { color: var(--fg2); line-height: 1.8; }
+  .fade-in { animation: fadeIn .3s ease-out both; }
+  .stagger-1 { animation-delay: .05s; }
+  .stagger-2 { animation-delay: .1s; }
+  .stagger-3 { animation-delay: .15s; }
+
+  /* prose */
+  .prose { color: var(--fg2); line-height: 1.85; font-size: .9375rem; }
   .prose h1, .prose h2, .prose h3 {
-    color: var(--fg); font-weight: 600; margin-top: 2rem;
-    margin-bottom: 0.5rem; letter-spacing: -0.02em;
+    color: var(--fg); font-weight: 600; letter-spacing: -0.025em;
   }
-  .prose h1 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
-  .prose h2 { font-size: 1.2rem; }
-  .prose h3 { font-size: 1.05rem; }
-  .prose p { margin: 0.6rem 0; }
-  .prose a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--muted); }
+  .prose h1 { font-size: 1.5rem; margin: 2.5rem 0 .75rem; padding-bottom: .6rem; border-bottom: 1px solid var(--border); }
+  .prose h2 { font-size: 1.2rem; margin: 2rem 0 .5rem; }
+  .prose h3 { font-size: 1.05rem; margin: 1.5rem 0 .4rem; }
+  .prose p { margin: .7rem 0; }
+  .prose a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--muted); transition: text-decoration-color .15s; }
   .prose a:hover { text-decoration-color: var(--fg); }
   .prose strong { color: var(--fg); font-weight: 600; }
   .prose code {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
-    padding: 1px 4px; font-size: 0.85em; font-family: ui-monospace, monospace;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-size: .84em; font-family: ui-monospace, monospace;
   }
   .prose pre {
-    background: var(--surface) !important; border: 1px solid var(--border); border-radius: 6px;
-    padding: 1rem; overflow-x: auto;
+    background: var(--surface) !important; border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem 1.25rem; overflow-x: auto; font-size: .84rem;
   }
   .prose pre code { background: none; border: none; padding: 0; }
-  .prose blockquote { border-left: 2px solid var(--border); padding-left: 1rem; color: var(--muted2); margin: 1rem 0; }
-  .prose ul, .prose ol { padding-left: 1.5rem; margin: 0.6rem 0; }
-  .prose li { margin: 0.2rem 0; }
+  .prose blockquote {
+    border-left: 2px solid var(--border); padding: .6rem 0 .6rem 1.25rem;
+    color: var(--muted2); margin: 1.25rem 0; background: var(--glow); border-radius: 0 6px 6px 0;
+  }
+  .prose ul, .prose ol { padding-left: 1.5rem; margin: .7rem 0; }
+  .prose li { margin: .25rem 0; }
   .prose ul li::marker { color: var(--muted); }
-  .prose ol li::marker { color: var(--muted2); }
-  .prose hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
-  .prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
-  .prose th, .prose td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }
+  .prose ol li::marker { color: var(--muted2); font-weight: 500; }
+  .prose hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  .prose table { width: 100%; border-collapse: collapse; margin: 1.25rem 0; font-size: .84rem; }
+  .prose th, .prose td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; }
   .prose th { background: var(--surface); color: var(--fg); font-weight: 600; }
-  .prose tr:nth-child(even) { background: var(--surface); }
+  .prose tr:nth-child(even) { background: var(--glow); }
+  .prose img { border-radius: 8px; margin: 1rem 0; }
 }
